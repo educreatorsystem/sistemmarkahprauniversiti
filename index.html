@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Markah Prauniversiti - SMK Tagasan Semporna</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @media print {
+            .print-hidden { display: none !important; }
+            body { background-color: white; margin: 0; padding: 0; }
+            #app-content { padding: 0; margin: 0; max-width: 100%; }
+        }
+        .toast-animate { animation: slideIn 0.3s ease-out forwards; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col font-sans text-gray-800">
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+    <!-- Header Utama -->
+    <header class="bg-indigo-900 text-white shadow-md print-hidden">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div class="flex items-center space-x-4">
+                <div class="bg-white p-1.5 rounded-lg">
+                    <img src="https://iili.io/Bb5F5ue.md.png" alt="Logo Sekolah" class="h-14 w-auto object-contain">
+                </div>
+                <div>
+                    <h1 class="text-2xl font-black tracking-wider text-white leading-tight">PRA UNIVERSITI<br>SMK TAGASAN SEMPORNA</h1>
+                    <p class="text-indigo-200 text-sm font-medium tracking-wide mt-1">Sistem Analisis Markah</p>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigasi Tab -->
+    <div class="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm print-hidden">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex space-x-1 overflow-x-auto py-3" id="tab-navigation">
+                <!-- Tabs will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex-grow" id="app-content">
+        <!-- Content will be injected here via JS -->
+    </main>
+
+    <script>
+        // --- DATA KONFIGURASI ---
+        const API_URL = 'https://script.google.com/macros/s/AKfycbxHGkhf-uV85N7oAbKS1uB-DqxGYaU2UkilQLuRXk_OWlLT2xv0TJSBXnx8Q7ZOPB7N/exec';
+
+        const subjects = [
+            { code: '900', name: 'PENGAJIAN AM' },
+            { code: '942', name: 'GEOGRAFI' },
+            { code: '910', name: 'BAHASA MELAYU' },
+            { code: '940', name: 'SEJARAH' },
+            { code: '922', name: 'KESUSASTERAAN MELAYU KOMUNIKATIF' },
+            { code: '944', name: 'EKONOMI' }
+        ];
+
+        let classesList = []; 
+        const peperiksaanList = ['PERCUBAAN SEM 1', 'PERCUBAAN SEM 2', 'PERCUBAAN SEM 3'];
+        let studentsData = [];
+
+        // --- STATE APLIKASI (Global Object) ---
+        const app = {
+            activeTab: 'input',
+            marks: {},
+            filters: {},
+            charts: {
+                subjek: null,
+                keseluruhan: null
+            }
+        };
+
+        // --- FUNGSI AMBIL DATA DARI GOOGLE SHEET ---
+        async function fetchStudentData() {
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'GET',
+                    mode: 'cors',
+                    redirect: 'follow'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP Error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                studentsData = data.students || [];
+                app.marks = data.marks || {};
+                
+                const classSet = new Set(studentsData.map(s => s.className));
+                classesList = Array.from(classSet).sort();
+                if(classesList.length === 0) classesList = ['TIADA KELAS'];
+
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                showToast("Gagal menyambung. Sila semak status deployment Apps Script anda.", "error");
+                studentsData = [];
+                classesList = ['TIADA KELAS'];
+            }
+        }
+
+        // --- FUNGSI SIMPAN KE AWAN (GOOGLE SHEET) ---
+        async function saveMarksToCloud() {
+            const { class: cls, peperiksaan: pep, subject: sub } = app.filters.input;
+            const currentMarks = app.marks[pep]?.[cls] || {};
+
+            const updates = [];
+            const classStudents = studentsData.filter(s => s.className === cls);
+
+            classStudents.forEach(stu => {
+                const m = currentMarks[stu.id]?.[sub];
+                if (m !== undefined) {
+                    updates.push({ id: stu.id, mark: m });
+                } else {
+                    updates.push({ id: stu.id, mark: "" });
+                }
+            });
+
+            const payload = {
+                peperiksaan: pep,
+                kelas: cls,
+                subject: sub,
+                updates: updates
+            };
+
+            const loadingToast = showToast("Menyimpan markah ke pangkalan awan...", "loading");
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    mode: 'cors',
+                    redirect: 'follow',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                
+                if(loadingToast) loadingToast.remove();
+
+                if(result.status === 'success') {
+                    showToast("Markah berjaya disimpan!", "success");
+                } else {
+                    showToast("Ralat: " + result.message, "error");
+                }
+
+            } catch (error) {
+                if(loadingToast) loadingToast.remove();
+                showToast("Ralat komunikasi pelayan!", "error");
+            }
+        }
+
+        // --- FUNGSI PEMARKAHAN & LOGIK ---
+        function getLevel(className) {
+            if (!className) return 'STPM';
+            const upperClass = className.toUpperCase();
+            if (upperClass.includes('P2') || upperClass.includes('P1')) return 'STPM';
+            return 'STPM'; // Pra-U Default
+        }
+
+        function getGradeInfo(mark, level) {
+            if (mark === -2) return { grade: 'TH', point: 0, status: 'Tidak Hadir', desc: 'Tidak Hadir' };
+            if (mark === -1) return { grade: 'TD', point: 0, status: 'Tidak Ditaksir', desc: 'Tidak Ditaksir' };
+            if (typeof mark !== 'number' || isNaN(mark)) return { grade: '-', point: 0, status: '-', desc: '-' };
+
+            if (mark >= 80) return { grade: 'A', point: 4.00, status: 'Lulus Penuh', desc: 'Lulus Penuh' };
+            if (mark >= 75) return { grade: 'A-', point: 3.67, status: 'Lulus Penuh', desc: 'Lulus Penuh' };
+            if (mark >= 70) return { grade: 'B+', point: 3.33, status: 'Lulus Penuh', desc: 'Lulus Penuh' };
+            if (mark >= 65) return { grade: 'B', point: 3.00, status: 'Lulus Penuh', desc: 'Lulus Penuh' };
+            if (mark >= 60) return { grade: 'B-', point: 2.67, status: 'Lulus Penuh', desc: 'Lulus Penuh' };
+            if (mark >= 55) return { grade: 'C+', point: 2.33, status: 'Lulus Penuh', desc: 'Lulus Penuh' };
+            if (mark >= 50) return { grade: 'C', point: 2.00, status: 'Lulus Penuh', desc: 'Lulus Penuh' };
+            if (mark >= 45) return { grade: 'C-', point: 1.67, status: 'Lulus Sebahagian', desc: 'Lulus Sebahagian' };
+            if (mark >= 40) return { grade: 'D+', point: 1.33, status: 'Lulus Sebahagian', desc: 'Lulus Sebahagian' };
+            if (mark >= 30) return { grade: 'D', point: 1.00, status: 'Lulus Sebahagian', desc: 'Lulus Sebahagian' };
+            return { grade: 'F', point: 0, status: 'Gagal', desc: 'Gagal' };
+        }
+
+        function calculateStudentOverall(studentId, className, peperiksaanCode) {
+            const studentMarks = app.marks[peperiksaanCode]?.[className]?.[studentId] || {};
+            const level = getLevel(className);
+            
+            let totalMarks = 0;
+            let totalPoints = 0;
+            let subjectsTaken = 0;
+            
+            let amGradePoint = 0;
+            let amGrade = '';
+            let otherPoints = [];
+            
+            Object.keys(studentMarks).forEach(subCode => {
+                const mark = studentMarks[subCode];
+                if (mark >= 0) {
+                    totalMarks += mark;
+                    subjectsTaken++;
+                    const info = getGradeInfo(mark, level);
+                    totalPoints += info.point;
+                    
+                    if (subCode === '900') {
+                        amGradePoint = info.point;
+                        amGrade = info.grade;
+                    } else {
+                        otherPoints.push(info.point);
+                    }
+                }
+            });
+
+            let pngk = 0;
+            if (subjectsTaken > 0) {
+                otherPoints.sort((a, b) => b - a);
+                const top3Other = otherPoints.slice(0, 3);
+                const totalRelevantSubjects = 1 + top3Other.length;
+                const sumPoints = amGradePoint + top3Other.reduce((sum, p) => sum + p, 0);
+                pngk = (sumPoints / (totalRelevantSubjects >= 4 ? 4 : totalRelevantSubjects)).toFixed(2);
+            }
+
+            const averageMark = subjectsTaken > 0 ? (totalMarks / subjectsTaken).toFixed(2) : 0;
+            const averageGradePoint = subjectsTaken > 0 ? (totalPoints / subjectsTaken).toFixed(2) : 0;
+
+            return { totalMarks, averageMark, averageGradePoint, pngk: Number(pngk), amGradePoint, amGrade, subjectsTaken };
+        }
+
+        function getRankings(className, peperiksaanCode) {
+            const classStudents = studentsData.filter(s => s.className === className);
+            
+            const rankings = classStudents.map(student => {
+                const stats = calculateStudentOverall(student.id, className, peperiksaanCode);
+                return { ...student, ...stats };
+            });
+
+            rankings.sort((a, b) => {
+                const aValidPA = a.amGradePoint >= 2.0;
+                const bValidPA = b.amGradePoint >= 2.0;
+                
+                if (aValidPA && !bValidPA) return -1;
+                if (!aValidPA && bValidPA) return 1;
+                
+                if (b.pngk !== a.pngk) return b.pngk - a.pngk;
+                return b.averageMark - a.averageMark;
+            });
+
+            return rankings.map((r, index) => ({ ...r, rank: r.subjectsTaken > 0 ? index + 1 : '-' }));
+        }
+
+        // --- FUNGSI UTILITI ---
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            let icon = type === 'success' ? 'check-circle' : (type === 'error' ? 'alert-circle' : 'loader-2');
+            let bg = type === 'success' ? 'bg-green-600' : (type === 'error' ? 'bg-red-600' : 'bg-blue-600');
+            let spin = type === 'loading' ? 'animate-spin' : '';
+
+            toast.className = `${bg} text-white px-6 py-3 rounded-lg shadow-lg flex items-center toast-animate`;
+            toast.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2 ${spin}"></i><span class="font-medium">${message}</span>`;
+            
+            container.appendChild(toast);
+            lucide.createIcons();
+            
+            if (type !== 'loading') {
+                setTimeout(() => {
+                    toast.style.opacity = '0';
+                    toast.style.transition = 'opacity 0.3s ease';
+                    setTimeout(() => toast.remove(), 300);
+                }, 3000);
+            }
+            return toast;
+        }
+
+        function printReport(title = '', subtitle = '', isSlip = false) {
+            const printElement = document.querySelector('.print-content');
+            if (!printElement) return;
+
+            const printClone = printElement.cloneNode(true);
+            const originalCanvases = printElement.querySelectorAll('canvas');
+            const clonedCanvases = printClone.querySelectorAll('canvas');
+            
+            originalCanvases.forEach((canvas, index) => {
+                const img = document.createElement('img');
+                img.src = canvas.toDataURL('image/png');
+                img.className = 'print-canvas-img';
+                img.style.maxWidth = '100%';
+                img.style.height = 'auto';
+                img.style.maxHeight = '350px';
+                img.style.objectFit = 'contain';
+                clonedCanvases[index].parentNode.replaceChild(img, clonedCanvases[index]);
+            });
+
+            let contentHTML = printClone.innerHTML;
+            let headerHTML = '';
+            if (!isSlip) {
+                headerHTML = `
+                    <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 24px; margin-top: 16px; border-bottom: 2px solid #1e293b; padding-bottom: 16px; position: relative;">
+                        <img src="https://iili.io/Bb5F5ue.md.png" alt="Logo Sekolah" style="height: 70px; width: auto; position: absolute; left: 0;">
+                        <div style="text-align: center;">
+                            <h1 style="font-size: 22px; font-weight: bold; text-transform: uppercase; color: #1e293b; margin:0; line-height: 1.2;">PRA UNIVERSITI<br>SMK TAGASAN SEMPORNA</h1>
+                            <h2 style="font-size: 16px; font-weight: bold; color: #334155; margin-top: 8px; text-transform: uppercase;">${title}</h2>
+                            ${subtitle ? `<p style="font-size: 14px; font-weight: 600; color: #475569; margin-top: 4px; margin-bottom: 0;">${subtitle}</p>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            const printHTML = `
+                <!DOCTYPE html>
+                <html lang="ms">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Cetak - ${title}</title>
+                    <script src="https://cdn.tailwindcss.com"><\/script>
+                    <style>
+                        @page { size: A4; margin: 15mm; }
+                        body { margin: 0; padding: 0; background: white !important; color: black !important; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        .print-wrapper { width: 100%; max-width: 210mm; margin: 0 auto; }
+                        .page-break-after-always { page-break-after: always; }
+                        .print-hidden { display: none !important; }
+                        canvas, .print-canvas-img { max-width: 100% !important; height: auto !important; }
+                        table { width: 100%; border-collapse: collapse; }
+                        th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; }
+                        th { background-color: #f1f5f9; }
+                    </style>
+                </head>
+                <body>
+                    <div class="print-wrapper">
+                        ${headerHTML}
+                        ${contentHTML}
+                    </div>
+                    <script>
+                        window.onload = function() { setTimeout(function() { window.print(); window.close(); }, 800); };
+                    <\/script>
+                </body>
+                </html>
+            `;
+
+            const printWindow = window.open('', '_blank');
+            printWindow.document.open();
+            printWindow.document.write(printHTML);
+            printWindow.document.close();
+        }
+
+        // --- FUNGSI RENDER ANTARA MUKA (UI) ---
+        function renderTabs() {
+            const tabs = [
+                { id: 'input', label: 'Input Markah', icon: 'settings' },
+                { id: 'individu', label: 'Analisis Individu', icon: 'user' },
+                { id: 'subjek', label: 'Analisis Subjek', icon: 'pie-chart' },
+                { id: 'keseluruhan', label: 'Analisis Keseluruhan', icon: 'bar-chart-2' },
+                { id: 'laporan', label: 'Pelaporan & Slip', icon: 'file-text' }
+            ];
+
+            const navContainer = document.getElementById('tab-navigation');
+            navContainer.innerHTML = tabs.map(tab => `
+                <button onclick="app.setTab('${tab.id}')" 
+                    class="flex items-center px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${app.activeTab === tab.id ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}">
+                    <i data-lucide="${tab.icon}" class="w-4 h-4 mr-2"></i> ${tab.label}
+                </button>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        app.setTab = function(tabId) {
+            app.activeTab = tabId;
+            renderTabs();
+            renderContent();
+        };
+
+        app.updateFilter = function(tab, key, value) {
+            app.filters[tab][key] = value;
+            renderContent();
+        };
+
+        function renderContent() {
+            const container = document.getElementById('app-content');
+            
+            if (app.charts.subjek) { app.charts.subjek.destroy(); app.charts.subjek = null; }
+            if (app.charts.keseluruhan) { app.charts.keseluruhan.destroy(); app.charts.keseluruhan = null; }
+
+            switch (app.activeTab) {
+                case 'input': renderInputTab(container); break;
+                case 'individu': renderIndividuTab(container); break;
+                case 'subjek': renderSubjekTab(container); break;
+                case 'keseluruhan': renderKeseluruhanTab(container); break;
+                case 'laporan': renderLaporanTab(container); break;
+            }
+            lucide.createIcons();
+        }
+
+        app.handleMarkChange = function(studentId, val) {
+            const { class: cls, peperiksaan: pep, subject: sub } = app.filters.input;
+            if (!app.marks[pep]) app.marks[pep] = {};
+            if (!app.marks[pep][cls]) app.marks[pep][cls] = {};
+            if (!app.marks[pep][cls][studentId]) app.marks[pep][cls][studentId] = {};
+            
+            let parsedVal = parseInt(val, 10);
+            if (isNaN(parsedVal) && val !== '') return;
+            if (parsedVal > 100) parsedVal = 100;
+            if (parsedVal < 0 && val !== '') parsedVal = 0;
+
+            if (val === '') {
+                delete app.marks[pep][cls][studentId][sub];
+            } else {
+                app.marks[pep][cls][studentId][sub] = parsedVal;
+            }
+            renderContent();
+        };
+
+        app.handleSpecialMark = function(studentId, type) {
+            const { class: cls, peperiksaan: pep, subject: sub } = app.filters.input;
+            if (!app.marks[pep]) app.marks[pep] = {};
+            if (!app.marks[pep][cls]) app.marks[pep][cls] = {};
+            if (!app.marks[pep][cls][studentId]) app.marks[pep][cls][studentId] = {};
+            
+            app.marks[pep][cls][studentId][sub] = type === 'TD' ? -1 : -2;
+            renderContent();
+        };
+
+        function renderInputTab(container) {
+            const { class: cls, peperiksaan: pep, subject: sub } = app.filters.input;
+            const classStudents = studentsData.filter(s => s.className === cls);
+            const currentMarks = app.marks[pep]?.[cls] || {};
+            const level = getLevel(cls);
+
+            let tableHTML = classStudents.map((student, idx) => {
+                const rawMark = currentMarks[student.id]?.[sub];
+                const markVal = rawMark !== undefined ? rawMark : '';
+                const gradeInfo = getGradeInfo(rawMark, level);
+                const isTD = rawMark === -1;
+                const isTH = rawMark === -2;
+                const gradeBadgeClass = (gradeInfo.grade === 'A' || gradeInfo.grade.includes('A')) ? 'bg-green-100 text-green-800' : 
+                                        (gradeInfo.grade === 'F' || gradeInfo.grade === 'G') ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800';
+
+                return `
+                    <tr class="hover:bg-gray-50 transition-colors">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${idx + 1}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${student.name}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <div class="flex items-center justify-center space-x-2">
+                                <input type="number" min="0" max="100" 
+                                    value="${markVal >= 0 ? markVal : ''}" 
+                                    onchange="app.handleMarkChange('${student.id}', this.value)"
+                                    onkeyup="app.handleMarkChange('${student.id}', this.value)"
+                                    class="w-20 p-1 text-center border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-sm" placeholder="-">
+                                <button onclick="app.handleSpecialMark('${student.id}', 'TD')" class="px-2 py-1 text-xs rounded font-medium ${isTD ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">TD</button>
+                                <button onclick="app.handleSpecialMark('${student.id}', 'TH')" class="px-2 py-1 text-xs rounded font-medium ${isTH ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">TH</button>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-bold text-gray-700">
+                            <span class="px-2 py-1 rounded-full text-xs ${gradeBadgeClass}">${gradeInfo.grade}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${gradeInfo.desc}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            if (classStudents.length === 0) tableHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-gray-500">Tiada murid dalam kelas ini.</td></tr>`;
+
+            container.innerHTML = `
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                    <h2 class="text-xl font-bold text-gray-800 mb-6 flex items-center"><i data-lucide="settings" class="mr-2"></i> Kemasukan Markah</h2>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Peperiksaan</label>
+                            <select onchange="app.updateFilter('input', 'peperiksaan', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${peperiksaanList.map(a => `<option value="${a}" ${pep === a ? 'selected' : ''}>${a}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Kelas</label>
+                            <select onchange="app.updateFilter('input', 'class', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${classesList.map(c => `<option value="${c}" ${cls === c ? 'selected' : ''}>${c}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Subjek</label>
+                            <select onchange="app.updateFilter('input', 'subject', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${subjects.map(s => `<option value="${s.code}" ${sub === s.code ? 'selected' : ''}>${s.code} - ${s.name}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto rounded-lg border border-gray-200">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase w-16">Bil</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nama Murid</th>
+                                    <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase w-48">Markah (0-100)</th>
+                                    <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase w-24">Gred</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tafsiran</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">${tableHTML}</tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="mt-6 flex justify-end">
+                        <button onclick="saveMarksToCloud()" class="flex items-center px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm transition-colors">
+                            <i data-lucide="save" class="w-5 h-5 mr-2"></i> Simpan Markah
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderIndividuTab(container) {
+            const { class: cls, peperiksaan: pep } = app.filters.individu;
+            const classStudents = studentsData.filter(s => s.className === cls);
+            const rankings = getRankings(cls, pep);
+            const level = getLevel(cls);
+            const pepMarks = app.marks[pep]?.[cls] || {};
+
+            const subjectAnalysis = subjects.map(sub => {
+                let bestMark = -1;
+                let bestStudents = [];
+                classStudents.forEach(stu => {
+                    const mark = pepMarks[stu.id]?.[sub.code];
+                    if (mark !== undefined && mark >= 0) {
+                        if (mark > bestMark) { bestMark = mark; bestStudents = [stu.name]; }
+                        else if (mark === bestMark) { bestStudents.push(stu.name); }
+                    }
+                });
+                return {
+                    subject: sub.name, code: sub.code,
+                    students: bestStudents.length > 0 ? bestStudents.join(', ') : 'TIADA',
+                    mark: bestMark > -1 ? bestMark : '-',
+                    gradeInfo: bestMark > -1 ? getGradeInfo(bestMark, level) : { grade: '-', desc: '-' }
+                };
+            });
+
+            const theadSubjects = subjects.map(sub => `
+                <th class="px-2 py-2 text-center text-xs font-bold text-gray-600 uppercase border-r border-b" colspan="2">
+                    ${sub.code} - <br/> <span class="text-[10px] text-gray-400">${sub.name}</span>
+                </th>
+            `).join('');
+
+            const theadSubCols = subjects.map(() => `
+                <th class="px-2 py-1 text-center text-[10px] font-semibold text-gray-500 uppercase border-r border-b">MARKAH</th>
+                <th class="px-2 py-1 text-center text-[10px] font-semibold text-gray-500 uppercase border-r border-b">GRED</th>
+            `).join('');
+
+            let tableHTML = rankings.map(student => {
+                const subCells = subjects.map(sub => {
+                    const mark = pepMarks[student.id]?.[sub.code];
+                    const gInfo = getGradeInfo(mark, level);
+                    const displayMark = mark === -1 ? 'TD' : mark === -2 ? 'TH' : mark !== undefined ? mark : '-';
+                    const gradeColor = (gInfo.grade.includes('A')) ? 'text-green-600' : (['F','G'].includes(gInfo.grade)) ? 'text-red-600' : 'text-blue-600';
+                    return `
+                        <td class="px-2 py-3 whitespace-nowrap text-center text-sm text-gray-600 border-r border-b">${displayMark}</td>
+                        <td class="px-2 py-3 whitespace-nowrap text-center text-sm font-semibold border-r border-b ${gradeColor}">${gInfo.grade}</td>
+                    `;
+                }).join('');
+
+                return `
+                    <tr class="hover:bg-slate-50">
+                        <td class="px-4 py-3 whitespace-nowrap text-center font-bold text-slate-700 border-r border-b">${student.rank}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 border-r border-b">${student.name}</td>
+                        ${subCells}
+                        <td class="px-4 py-3 whitespace-nowrap text-center text-sm border-r border-b">${student.totalMarks}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-center text-sm border-r border-b">${student.averageMark}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-center font-bold text-indigo-600 border-b">${student.pngk}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            if (rankings.length === 0) tableHTML = `<tr><td colspan="${5 + subjects.length*2}" class="p-4 text-center text-gray-500 border-b">Tiada rekod.</td></tr>`;
+
+            const bestHTML = subjectAnalysis.map((item, idx) => `
+                <tr class="hover:bg-slate-50">
+                    <td class="p-3 text-sm border-b">${idx + 1}</td>
+                    <td class="p-3 text-sm font-medium border-b">${item.code} - ${item.subject}</td>
+                    <td class="p-3 text-sm font-semibold text-indigo-700 border-b">${item.students}</td>
+                    <td class="p-3 text-center text-sm font-bold border-b">${item.mark}</td>
+                    <td class="p-3 text-center font-bold text-green-600 border-b">${item.gradeInfo.grade}</td>
+                    <td class="p-3 text-sm border-b">${item.gradeInfo.desc}</td>
+                </tr>
+            `).join('');
+
+            container.innerHTML = `
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-bold text-gray-800 flex items-center"><i data-lucide="user" class="mr-2"></i> Analisis Individu Kelas</h2>
+                        <button onclick="printReport('Analisis Individu Kelas', 'Kelas: ${cls} | Peperiksaan: ${pep}')" class="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm text-sm">
+                            <i data-lucide="printer" class="w-4 h-4 mr-2"></i> Cetak Analisis
+                        </button>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 print-hidden">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Peperiksaan</label>
+                            <select onchange="app.updateFilter('individu', 'peperiksaan', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${peperiksaanList.map(a => `<option value="${a}" ${pep === a ? 'selected' : ''}>${a}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Kelas</label>
+                            <select onchange="app.updateFilter('individu', 'class', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${classesList.map(c => `<option value="${c}" ${cls === c ? 'selected' : ''}>${c}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="print-content">
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-slate-700 mb-4 bg-slate-100 p-3 rounded-lg border-l-4 border-blue-500">Kedudukan Dalam Kelas</h3>
+                            <div class="overflow-x-auto border rounded-xl">
+                                <table class="min-w-full border-collapse">
+                                    <thead class="bg-slate-50">
+                                        <tr>
+                                            <th class="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase border-r border-b" rowspan="2">Kedudukan</th>
+                                            <th class="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase border-r border-b" rowspan="2">Nama Murid</th>
+                                            ${theadSubjects}
+                                            <th class="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase border-r border-b" rowspan="2">Jumlah<br/>Markah</th>
+                                            <th class="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase border-r border-b" rowspan="2">Purata</th>
+                                            <th class="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase border-b" rowspan="2">PNGK</th>
+                                        </tr>
+                                        <tr>${theadSubCols}</tr>
+                                    </thead>
+                                    <tbody class="bg-white">${tableHTML}</tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 class="text-lg font-bold text-slate-700 mb-4 bg-slate-100 p-3 rounded-lg border-l-4 border-yellow-500">Murid Terbaik Mengikut Subjek</h3>
+                            <table class="w-full border-collapse text-left">
+                                <thead>
+                                    <tr class="bg-slate-50 border-b-2 border-slate-200">
+                                        <th class="p-3 text-sm font-bold text-gray-600 border-b">Bil</th>
+                                        <th class="p-3 text-sm font-bold text-gray-600 border-b">Subjek</th>
+                                        <th class="p-3 text-sm font-bold text-gray-600 border-b">Nama Murid</th>
+                                        <th class="p-3 text-center text-sm font-bold text-gray-600 border-b">Markah</th>
+                                        <th class="p-3 text-center text-sm font-bold text-gray-600 border-b">Gred</th>
+                                        <th class="p-3 text-sm font-bold text-gray-600 border-b">Pencapaian</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${bestHTML}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSubjekTab(container) {
+            const { class: cls, peperiksaan: pep, subject: sub } = app.filters.subjek;
+            const level = getLevel(cls);
+            const classStudents = studentsData.filter(s => s.className === cls);
+            const pepMarks = app.marks[pep]?.[cls] || {};
+            
+            const gradeCounts = {};
+            let totalTakes = 0; let passes = 0; let fails = 0; let excellent = 0; let notAssessed = 0;
+
+            classStudents.forEach(stu => {
+                const mark = pepMarks[stu.id]?.[sub];
+                if (mark === -1 || mark === -2) {
+                    notAssessed++;
+                } else if (mark !== undefined) {
+                    totalTakes++;
+                    const info = getGradeInfo(mark, level);
+                    gradeCounts[info.grade] = (gradeCounts[info.grade] || 0) + 1;
+                    
+                    if (['A+', 'A', 'A-'].includes(info.grade)) excellent++;
+                    if (['F', 'G'].includes(info.grade)) fails++;
+                    else passes++;
+                }
+            });
+
+            let gradeSequence = ['A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D+', 'D', 'F'];
+
+            const chartLabels = [];
+            const chartData = [];
+            let tableRows = gradeSequence.map(g => {
+                const count = gradeCounts[g] || 0;
+                chartLabels.push(g);
+                chartData.push(count);
+                const percent = totalTakes > 0 ? ((count/totalTakes)*100).toFixed(1) : '0.0';
+                return `
+                    <tr>
+                        <td class="py-2 px-4 border-b font-bold text-slate-800">${g}</td>
+                        <td class="py-2 px-4 border-b text-sm">${count}</td>
+                        <td class="py-2 px-4 border-b text-sm">${percent}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            const lulusPct = totalTakes > 0 ? ((passes/totalTakes)*100).toFixed(1) : 0;
+            const cemerlangPct = totalTakes > 0 ? ((excellent/totalTakes)*100).toFixed(1) : 0;
+            const gagalPct = totalTakes > 0 ? ((fails/totalTakes)*100).toFixed(1) : 0;
+
+            container.innerHTML = `
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-bold text-gray-800 flex items-center"><i data-lucide="pie-chart" class="mr-2"></i> Analisis Peperiksaan Subjek</h2>
+                        <button onclick="printReport('Analisis Peperiksaan Subjek', 'Kelas: ${cls} | Subjek: ${sub} | Peperiksaan: ${pep}')" class="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm text-sm">
+                            <i data-lucide="printer" class="w-4 h-4 mr-2"></i> Cetak Analisis
+                        </button>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 print-hidden">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Peperiksaan</label>
+                            <select onchange="app.updateFilter('subjek', 'peperiksaan', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${peperiksaanList.map(a => `<option value="${a}" ${pep === a ? 'selected' : ''}>${a}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Kelas</label>
+                            <select onchange="app.updateFilter('subjek', 'class', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${classesList.map(c => `<option value="${c}" ${cls === c ? 'selected' : ''}>${c}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Subjek</label>
+                            <select onchange="app.updateFilter('subjek', 'subject', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${subjects.map(s => `<option value="${s.code}" ${sub === s.code ? 'selected' : ''}>${s.code} - ${s.name}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="print-content">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                            <div class="bg-blue-50 p-4 rounded-xl border border-blue-100 text-center">
+                                <p class="text-sm text-blue-600 font-semibold mb-1">Peratus Lulus</p>
+                                <p class="text-3xl font-bold text-blue-800">${lulusPct}%</p>
+                                <p class="text-xs text-blue-500 mt-1">${passes} / ${totalTakes} Murid</p>
+                            </div>
+                            <div class="bg-green-50 p-4 rounded-xl border border-green-100 text-center">
+                                <p class="text-sm text-green-600 font-semibold mb-1">Cemerlang</p>
+                                <p class="text-3xl font-bold text-green-800">${cemerlangPct}%</p>
+                                <p class="text-xs text-green-500 mt-1">${excellent} Murid</p>
+                            </div>
+                            <div class="bg-red-50 p-4 rounded-xl border border-red-100 text-center">
+                                <p class="text-sm text-red-600 font-semibold mb-1">Gagal</p>
+                                <p class="text-3xl font-bold text-red-800">${gagalPct}%</p>
+                                <p class="text-xs text-red-500 mt-1">${fails} Murid</p>
+                            </div>
+                            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 text-center">
+                                <p class="text-sm text-slate-600 font-semibold mb-1">Tidak Ditaksir</p>
+                                <p class="text-3xl font-bold text-slate-800">${notAssessed}</p>
+                                <p class="text-xs text-slate-500 mt-1">TD / TH</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            <div>
+                                <h3 class="font-bold text-slate-700 mb-4 bg-slate-100 p-3 rounded-lg">Jadual Taburan Gred</h3>
+                                <table class="w-full border-collapse text-center">
+                                    <thead>
+                                        <tr class="bg-slate-50 border-y border-slate-200">
+                                            <th class="py-2 px-4 border-b text-sm font-bold text-slate-600">Gred</th>
+                                            <th class="py-2 px-4 border-b text-sm font-bold text-slate-600">Bilangan</th>
+                                            <th class="py-2 px-4 border-b text-sm font-bold text-slate-600">Peratus (%)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>${tableRows}</tbody>
+                                </table>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-700 mb-4 bg-slate-100 p-3 rounded-lg">Carta Taburan Gred</h3>
+                                <div class="h-64 relative w-full">
+                                    <canvas id="subjekChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            setTimeout(() => {
+                const ctx = document.getElementById('subjekChart').getContext('2d');
+                app.charts.subjek = new Chart(ctx, {
+                    type: 'bar',
+                    data: { labels: chartLabels, datasets: [{ label: 'Bilangan Murid', data: chartData, backgroundColor: '#4f46e5', borderRadius: 4 }] },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } }
+                });
+            }, 50);
+        }
+
+        function renderKeseluruhanTab(container) {
+            const { aliran: selectedAliran, peperiksaan: pep } = app.filters.keseluruhan;
+            
+            let classStudents = [];
+            if (selectedAliran === '6 ATAS') {
+                classStudents = studentsData.filter(s => s.className.includes('P2'));
+            } else if (selectedAliran === '6 BAWAH') {
+                classStudents = studentsData.filter(s => s.className.includes('P1'));
+            }
+            const level = 'STPM'; 
+
+            const chartLabels = [];
+            const chartData = [];
+
+            const subjectStatsHTML = subjects.map(sub => {
+                let totalPts = 0; let totalMks = 0; let count = 0;
+                classStudents.forEach(stu => {
+                    const mark = app.marks[pep]?.[stu.className]?.[stu.id]?.[sub.code];
+                    if (mark !== undefined && mark >= 0) {
+                        count++; totalMks += mark; totalPts += getGradeInfo(mark, level).point;
+                    }
+                });
+
+                const avgGP = count > 0 ? (totalPts / count).toFixed(2) : 0;
+                
+                chartLabels.push(sub.code);
+                chartData.push(Number(avgGP));
+
+                return `
+                    <tr class="hover:bg-slate-50">
+                        <td class="py-2 px-4 border-b text-sm font-medium">${sub.code} - ${sub.name}</td>
+                        <td class="py-2 px-4 border-b text-center text-sm">${count}</td>
+                        <td class="py-2 px-4 border-b text-center text-sm font-bold text-indigo-600">${Number(avgGP).toFixed(2)}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            container.innerHTML = `
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-bold text-gray-800 flex items-center"><i data-lucide="bar-chart-2" class="mr-2"></i> Analisis Keseluruhan Aliran</h2>
+                        <button onclick="printReport('Analisis Keseluruhan Aliran', 'Aliran: ${selectedAliran} | Peperiksaan: ${pep}')" class="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm text-sm">
+                            <i data-lucide="printer" class="w-4 h-4 mr-2"></i> Cetak Analisis
+                        </button>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 print-hidden">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Peperiksaan</label>
+                            <select onchange="app.updateFilter('keseluruhan', 'peperiksaan', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                ${peperiksaanList.map(a => `<option value="${a}" ${pep === a ? 'selected' : ''}>${a}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-600 mb-1">Aliran</label>
+                            <select onchange="app.updateFilter('keseluruhan', 'aliran', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                <option value="6 ATAS" ${selectedAliran === '6 ATAS' ? 'selected' : ''}>6 ATAS (Tingkatan 6 Atas)</option>
+                                <option value="6 BAWAH" ${selectedAliran === '6 BAWAH' ? 'selected' : ''}>6 BAWAH (Tingkatan 6 Bawah)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="print-content">
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            <div>
+                                <h3 class="font-bold text-slate-700 mb-4 bg-slate-100 p-3 rounded-lg">Pencapaian Purata Mengikut Aliran</h3>
+                                <table class="w-full border-collapse text-left">
+                                    <thead>
+                                        <tr class="bg-slate-50">
+                                            <th class="py-2 px-4 border-b text-sm font-bold text-slate-600">Subjek</th>
+                                            <th class="py-2 px-4 border-b text-center text-sm font-bold text-slate-600">Bil Calon Hadir</th>
+                                            <th class="py-2 px-4 border-b text-center text-sm font-bold text-slate-600">Purata Nilai Gred</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>${subjectStatsHTML}</tbody>
+                                </table>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-700 mb-4 bg-slate-100 p-3 rounded-lg">Perbandingan Nilai Gred</h3>
+                                <div class="h-64 relative w-full">
+                                    <canvas id="keseluruhanChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            setTimeout(() => {
+                const ctx = document.getElementById('keseluruhanChart').getContext('2d');
+                app.charts.keseluruhan = new Chart(ctx, {
+                    type: 'bar',
+                    data: { labels: chartLabels, datasets: [{ label: 'Purata Nilai Gred', data: chartData, backgroundColor: '#10b981', borderRadius: 4 }] },
+                    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { max: 4, beginAtZero: true } }, plugins: { legend: { display: false } } }
+                });
+            }, 50);
+        }
+
+        function renderLaporanTab(container) {
+            const { class: cls, peperiksaan: pep } = app.filters.laporan;
+            const classStudents = studentsData.filter(s => s.className === cls);
+            const level = getLevel(cls);
+            const pepMarks = app.marks[pep]?.[cls] || {};
+            const rankings = getRankings(cls, pep);
+
+            let slipsHTML = classStudents.map(student => {
+                const studentMarks = [];
+                let totalM = 0; let totalP = 0; let count = 0;
+                let amPt = 0; let amGr = ''; let othPts = [];
+
+                subjects.forEach(sub => {
+                    const mark = pepMarks[student.id]?.[sub.code];
+                    if (mark !== undefined) {
+                        const info = getGradeInfo(mark, level);
+                        studentMarks.push({
+                            code: sub.code, name: sub.name, mark: mark >= 0 ? mark : (mark === -1 ? 'TD' : 'TH'),
+                            grade: info.grade, point: info.point, desc: info.desc
+                        });
+
+                        if (mark >= 0) {
+                            totalM += mark; totalP += info.point; count++;
+                            if (sub.code === '900') { amPt = info.point; amGr = info.grade; } 
+                            else { othPts.push(info.point); }
+                        }
+                    }
+                });
+
+                let pngk = 0;
+                if (count > 0) {
+                    othPts.sort((a,b)=>b-a);
+                    const top3 = othPts.slice(0,3);
+                    const totalRelevantSubjects = 1 + top3.length;
+                    pngk = ((amPt + top3.reduce((a,b)=>a+b,0)) / (totalRelevantSubjects >= 4 ? 4 : totalRelevantSubjects)).toFixed(2);
+                }
+
+                const avgMark = count > 0 ? (totalM/count).toFixed(2) : 0;
+                const rData = rankings.find(r => r.id === student.id);
+                const rankStr = rData ? `${rData.rank} / ${rankings.length}` : '-';
+
+                let ulasan = "Teruskan usaha anda.";
+                if (pngk >= 3.0) ulasan = "Tahniah! Pencapaian yang amat membanggakan. Kekalkan kecemerlangan.";
+                else if (pngk >= 2.0) ulasan = "Pencapaian memuaskan. Tingkatkan lagi usaha untuk keputusan lebih baik.";
+                else if (count > 0) ulasan = "Anda perlu melipatgandakan usaha untuk lulus. Sila berjumpa dengan guru mata pelajaran.";
+                
+
+                const tableRowsHTML = studentMarks.map((sm, i) => `
+                    <tr>
+                        <td class="border border-slate-300 py-2 px-3 text-center">${i+1}</td>
+                        <td class="border border-slate-300 py-2 px-3 font-medium uppercase">${sm.name}</td>
+                        <td class="border border-slate-300 py-2 px-3 text-center font-bold">${sm.mark}</td>
+                        <td class="border border-slate-300 py-2 px-3 text-center font-bold">${sm.grade}</td>
+                        <td class="border border-slate-300 py-2 px-3 text-center">${sm.mark >= 0 ? sm.point.toFixed(2) : '-'}</td>
+                        <td class="border border-slate-300 py-2 px-3 text-xs">${sm.desc}</td>
+                    </tr>
+                `).join('');
+
+                return `
+                    <div class="bg-white p-8 rounded-xl shadow-sm border border-gray-200 mb-8 max-w-4xl mx-auto page-break-after-always">
+                        <div class="flex items-center justify-center relative mb-6 border-b-2 border-slate-800 pb-4">
+                            <img src="https://iili.io/Bb5F5ue.md.png" alt="Logo Sekolah" class="absolute left-4" style="height: 75px; width: auto;">
+                            <div class="text-center">
+                                <h1 class="text-xl font-bold uppercase tracking-wider text-slate-800 leading-tight">PRA UNIVERSITI<br>SMK TAGASAN SEMPORNA</h1>
+                                <h2 class="text-lg font-bold text-slate-700 mt-2 uppercase">SLIP KEPUTUSAN PEPERIKSAAN</h2>
+                                <p class="text-sm font-semibold text-slate-600 mt-1">${pep}</p>
+                            </div>
+                        </div>
+
+                        <div class="mb-6 grid grid-cols-2 gap-4 text-sm">
+                            <div class="flex"><span class="w-24 font-bold text-slate-700">NAMA</span> <span class="font-semibold uppercase">: ${student.name}</span></div>
+                            <div class="flex"><span class="w-24 font-bold text-slate-700">KELAS</span> <span class="font-semibold uppercase">: ${student.className}</span></div>
+                        </div>
+
+                        <table class="w-full mb-6 border-collapse border border-slate-300 text-sm">
+                            <thead>
+                                <tr class="bg-slate-100">
+                                    <th class="border border-slate-300 py-2 px-3 text-center w-12">Bil</th>
+                                    <th class="border border-slate-300 py-2 px-3 text-left">Mata Pelajaran</th>
+                                    <th class="border border-slate-300 py-2 px-3 text-center w-24">Markah</th>
+                                    <th class="border border-slate-300 py-2 px-3 text-center w-24">Gred</th>
+                                    <th class="border border-slate-300 py-2 px-3 text-center w-24">Nilai Gred</th>
+                                    <th class="border border-slate-300 py-2 px-3 text-left w-48">Tafsiran</th>
+                                </tr>
+                            </thead>
+                            <tbody>${tableRowsHTML || `<tr><td colspan="6" class="py-4 text-center italic text-slate-500">Tiada rekod.</td></tr>`}</tbody>
+                        </table>
+
+                        <div class="mb-6 border-2 border-slate-800 rounded-lg overflow-hidden">
+                            <div class="bg-slate-800 text-white font-bold py-2 px-4 uppercase text-center tracking-widest text-sm">Maklumat Pencapaian</div>
+                            <div class="grid grid-cols-4 text-center" style="grid-template-columns: repeat(4, 1fr);">
+                                <div class="p-3 bg-slate-50 border-r-2 border-slate-200">
+                                    <div class="text-xs font-bold text-slate-500 uppercase mb-1">Bil Subjek</div>
+                                    <div class="text-lg font-bold text-slate-800">${count}</div>
+                                </div>
+                                <div class="p-3 bg-slate-50 border-r-2 border-slate-200">
+                                    <div class="text-xs font-bold text-slate-500 uppercase mb-1">Jumlah Markah</div>
+                                    <div class="text-lg font-bold text-slate-800">${totalM}</div>
+                                </div>
+                                <div class="p-3 bg-slate-50 border-r-2 border-slate-200">
+                                    <div class="text-xs font-bold text-slate-500 uppercase mb-1">Kedudukan</div>
+                                    <div class="text-lg font-bold text-slate-800">${rankStr}</div>
+                                </div>
+                                <div class="p-3 bg-slate-50">
+                                    <div class="text-xs font-bold text-indigo-600 uppercase mb-1">PNGK</div>
+                                    <div class="text-lg font-bold text-indigo-700">${pngk}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="border border-slate-300 p-4 rounded bg-slate-50 mb-8">
+                            <p class="text-sm font-bold text-slate-700 mb-1">Ulasan Guru Kelas:</p>
+                            <p class="text-sm italic text-slate-600">"${ulasan}"</p>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-8 mt-12 text-center text-sm pt-8">
+                            <div><div class="border-b border-slate-800 w-3/4 mx-auto mb-2"></div><p class="font-semibold text-slate-700">T.T Guru Kelas</p></div>
+                            <div><div class="border-b border-slate-800 w-3/4 mx-auto mb-2"></div><p class="font-semibold text-slate-700">T.T Pengetua</p></div>
+                            <div><div class="border-b border-slate-800 w-3/4 mx-auto mb-2"></div><p class="font-semibold text-slate-700">T.T Ibu Bapa / Penjaga</p></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            if (classStudents.length === 0) slipsHTML = `<div class="text-center py-12 text-gray-500">Tiada murid untuk dipaparkan.</div>`;
+
+            container.innerHTML = `
+                <div class="bg-transparent">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6 print-hidden">
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="text-xl font-bold text-gray-800 flex items-center"><i data-lucide="file-text" class="mr-2"></i> Pelaporan & Slip Keputusan</h2>
+                            <button onclick="printReport('Slip Keputusan', '', true)" class="flex items-center px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-medium rounded-lg shadow-sm text-sm">
+                                <i data-lucide="printer" class="w-4 h-4 mr-2"></i> Cetak Semua Slip
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-600 mb-1">Peperiksaan</label>
+                                <select onchange="app.updateFilter('laporan', 'peperiksaan', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                    ${peperiksaanList.map(a => `<option value="${a}" ${pep === a ? 'selected' : ''}>${a}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-600 mb-1">Kelas</label>
+                                <select onchange="app.updateFilter('laporan', 'class', this.value)" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                    ${classesList.map(c => `<option value="${c}" ${cls === c ? 'selected' : ''}>${c}</option>`).join('')}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="print-content">${slipsHTML}</div>
+                </div>
+            `;
+        }
+
+        // --- PEMULAAN (INITIALIZATION) ---
+        window.addEventListener('DOMContentLoaded', async () => {
+            renderTabs();
+            
+            document.getElementById('app-content').innerHTML = `
+                <div class="flex flex-col items-center justify-center py-24">
+                    <i data-lucide="loader-2" class="w-12 h-12 animate-spin text-indigo-600 mb-4"></i>
+                    <p class="text-gray-700 font-semibold">Memuat turun data murid dari Google Sheet...</p>
+                </div>
+            `;
+            lucide.createIcons();
+            
+            await fetchStudentData();
+            
+            const defaultClass = classesList.length > 0 ? classesList[0] : '';
+            const defaultPep = peperiksaanList[0];
+            
+            app.filters = {
+                input: { class: defaultClass, peperiksaan: defaultPep, subject: subjects[0].code },
+                individu: { class: defaultClass, peperiksaan: defaultPep },
+                subjek: { class: defaultClass, peperiksaan: defaultPep, subject: subjects[0].code },
+                keseluruhan: { aliran: '6 ATAS', peperiksaan: defaultPep },
+                laporan: { class: defaultClass, peperiksaan: defaultPep }
+            };
+            
+            renderContent();
+        });
+
+    </script>
+</body>
+</html>
